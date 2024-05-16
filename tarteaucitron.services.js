@@ -3208,22 +3208,34 @@ tarteaucitron.services.gtag = {
 
         return ['_ga', '_gat', '_gid', '__utma', '__utmb', '__utmc', '__utmt', '__utmz', tagUaCookie, tagGCookie, '_gcl_au'];
     })(),
-    "js": function () {
+    "js": function (opts) {
         "use strict";
         window.dataLayer = window.dataLayer || [];
-        tarteaucitron.addScript('https://www.googletagmanager.com/gtag/js?id=' + tarteaucitron.user.gtagUa, '', function () {
+        // Default options
+        if (!opts) { opts = {} }
+
+        // Allow provided the gtag UA via the options (opts)
+        var gtagUa = opts.gtagUa || tarteaucitron.user.gtagUa
+
+        // allow serving gtm.js from a custom tagging server.
+        var gtagScriptUrl = opts.gtagUrl || 'https://www.googletagmanager.com/gtag/js?id=' + gtagUa
+
+        // Allow configuration of annonymize_ip with the default being true / anonymized
+        var anonymize_ip = opts.anonymize_ip === false ? false : true
+
+        tarteaucitron.addScript(gtagScriptUrl, '', function () {
             window.gtag = function gtag() { dataLayer.push(arguments); }
             gtag('js', new Date());
-            var additional_config_info = (timeExpire !== undefined) ? {'anonymize_ip': true, 'cookie_expires': timeExpire / 1000} : {'anonymize_ip': true};
+            var additional_config_info = (timeExpire !== undefined) ? {'anonymize_ip': anonymize_ip, 'cookie_expires': timeExpire / 1000} : {'anonymize_ip': true};
 
             if (tarteaucitron.user.gtagCrossdomain) {
                 /**
                  * https://support.google.com/analytics/answer/7476333?hl=en
                  * https://developers.google.com/analytics/devguides/collection/gtagjs/cross-domain
                  */
-                gtag('config', tarteaucitron.user.gtagUa, additional_config_info, { linker: { domains: tarteaucitron.user.gtagCrossdomain, } });
+                gtag('config', gtagUa, additional_config_info, { linker: { domains: tarteaucitron.user.gtagCrossdomain, } });
             } else {
-                gtag('config', tarteaucitron.user.gtagUa, additional_config_info);
+                gtag('config', gtagUa, additional_config_info);
             }
 
             if (typeof tarteaucitron.user.gtagMore === 'function') {
@@ -5049,9 +5061,12 @@ tarteaucitron.services.facebookpixel = {
     "uri": "https://www.facebook.com/policy.php",
     "needConsent": true,
     "cookies": ['datr', 'fr', 'reg_ext_ref', 'reg_fb_gate', 'reg_fb_ref', 'sb', 'wd', 'x-src', '_fbp'],
-    "js": function () {
+    "js": function (opts) {
         "use strict";
         var n;
+        // Default options
+        if (!opts) { opts = {}}
+
         if (window.fbq) return;
         n = window.fbq = function () { n.callMethod ? n.callMethod.apply(n, arguments) : n.queue.push(arguments) };
         if (!window._fbq) window._fbq = n;
@@ -5060,7 +5075,10 @@ tarteaucitron.services.facebookpixel = {
         n.version = '2.0';
         n.queue = [];
         tarteaucitron.addScript('https://connect.facebook.net/en_US/fbevents.js');
-        fbq('init', tarteaucitron.user.facebookpixelId);
+
+        // allow configuration of pixelId from provided options, with a fallback to the tarteaucitron.user.facebookpixelId
+        fbq('init', opts.pixelId || tarteaucitron.user.facebookpixelId);
+
         fbq('track', 'PageView');
 
         if (typeof tarteaucitron.user.facebookpixelMore === 'function') {

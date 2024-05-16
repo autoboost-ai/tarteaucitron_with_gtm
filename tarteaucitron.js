@@ -36,6 +36,151 @@ var tarteaucitron = {
         "init": function () {},
         "load": function () {},
     },
+
+    // Checks the existing tarteaucitron cookie data for
+    // the status of "googletagmanager".
+    // When the user changes consent, this cookie is updated by tarteaucitron
+    //
+    // If googletagmanager=true - the user has accepted the consent
+    // If googletagmanager=false - the user has denied the consent
+    // If no tarteaucitron cookie is found - the user has not accepted the consent
+    gtmAllowed: function() {
+        var cookie = tarteaucitron.cookie.read();
+        var keys = ["googletagmanager"];
+        var consentAllowed = false;
+
+        if (!cookie) {
+             return false;
+        }
+
+        // Filtering out all cookies except for googletagmanager
+        // googletagmanager is used by tarteaucitron to check if the user has accepted the permission.
+        // if that is the case, the permission is marked as true
+        // and we can consider this as Consent=True
+        cookie.split('!').filter((function(v){
+            if (v && v.length > 1) {
+                var accept = false;
+                keys.forEach(function(key) {
+                    if (v.indexOf(key) >= 0) {
+                        accept = true;
+                    }
+                });
+
+                return accept;
+            }
+        })).forEach((function(v){
+            // check if the permission is marked as true
+            if (v.split('=')[1] === "true") {
+                consentAllowed = true;
+            }
+        }))
+
+        // The user's consent status
+        return consentAllowed;
+    },
+
+    // Executes a callback function when the Tarteaucitron services have been loaded
+    waitForServices: function(opts, callback) {
+        if (!opts) { opts = {}}
+        var servicesLoaded = false;
+        var ctx = this;
+        try {
+            if (!tarteaucitron.services.gtag) {
+                throw new Error("Tarteaucitron Services not Ready")
+            } else {
+                servicesLoaded = true
+            }
+        } catch (error) {
+            // check every 250ms for the services to arrive via network
+            // (usually takes less than 1s)
+            setTimeout(function(){
+                ctx.gtmWaitForServices(opts)
+            }, 250)
+        }
+
+        if (servicesLoaded) {
+            if (callback) {
+                callback()
+            }
+        }
+    },
+
+    fbInit: function(pixelId) {
+        tarteaucitron.services.facebookpixel.js({ pixelId: pixelId })
+    },
+
+    // Initialize the Google Tag Manager with the current consent status
+    gtmInit: function (opts) {
+        if (!opts) { opts = {} }
+        tarteaucitron.fbInit(opts.pixelId)
+
+        // Default behaviour: Anonymize the ip only if the user has not accepted the consent
+        var anonymize_ip = !tarteaucitron.gtmAllowed();
+
+        // "anoymize_ip_only_for_no_consent" will allow anonymizataion of only non-consented users
+        if (typeof opts.anonymize_ip_only_for_no_consent !== 'undefined') {
+            if (tarteaucitron.gtmAllowed() && opts.anonymize_ip_only_for_no_consent) {
+                anonymize_ip = false;
+            } else {
+                anonymize_ip = true;
+            }
+        }
+
+        // support the flag "anonymize_ip_always" to always anonymize the ip
+        if (opts.anonymize_ip_always) {
+            anonymize_ip = true;
+        }
+
+        // Load the gtag.js script
+        tarteaucitron.services.gtag.js({
+            anonymize_ip: anonymize_ip, // configurable annonymization of the ip for users that have given consent
+            gtagUa: opts.gtagUa, // required to initialize gtag.js
+            gtagUrl: opts.gtagUrl // optional override to use a custom tagging server to serve gtm.js
+        })
+
+        // Update gtag.js with the current consent status
+        tarteaucitron.updateGTMConsents()
+    },
+
+    // Read the current consent state and notifies GTAG of 
+    // the acceptable permissions to use.
+    //
+    // No Consent = ad_storage = denied, analytics_storage = denied
+    // Consent = ad_storage = granted, analytics_storage = granted
+    updateGTMConsents: function () {
+        tarteaucitron.dataLayer = window.dataLayer || tarteaucitron.dataLayer || []
+        // default permissions
+        var perms = {
+            ad_storage: 'granted',
+            ad_user_data: 'granted',
+            ad_personalization: 'granted',
+            analytics_storage: 'granted'
+        }
+
+        // When no consent is given - set these permissions to denied.
+        if (!tarteaucitron.gtmAllowed()) {
+            perms.ad_storage = 'denied'
+            perms.analytics_storage = 'denied'
+        }
+
+        // Push google_tag_params data to the dataLayer
+        // for Google Tag Manager to consume
+        var gaData =  {
+            'google_tag_params': {
+                'consent_info': perms
+            }
+        }
+
+        // push the data to the dataLayer for Google Tag Manager to consume when the page is loaded,
+        // or immediately if Gtag has already been loaded
+        tarteaucitron.dataLayer.push(gaData);
+
+        // if we have gtag available, update it with the current consent status
+        if (window.gtag) {
+            gtag('consent', 'update', perms);
+        }
+    },
+
     "init": function (params) {
         "use strict";
         var origOpen;
@@ -110,6 +255,24 @@ var tarteaucitron = {
 
         if(tarteaucitron.events.init) {
             tarteaucitron.events.init();
+        }
+
+        // If you  explicitly enable  "gtmWithLimitedAccess" in the params:
+        //    The GTM container will be loaded with limited permissions if the 
+        //    user has not accepted the consent.
+        if (params.gtmWithLimitedPermissions && typeof tarteaucitron.waitForServices == "function") {
+          tarteaucitron.waitForServices(params, function(){
+            if (params.facebookPixelId) {
+                tarteaucitron.fbInit(params.facebookPixelId)
+            } else {
+                console.error("[tarteaucitron] \"facebookPixelId\" is not configured via init({...})")
+            }
+            if (params.gtagUa) {
+                tarteaucitron.gtmInit(opts)
+            } else {
+                console.error("[tarteaucitron] \"gtagUa\" is not configured via init({...})")
+            }
+          });
         }
     },
     "initEvents": {
@@ -1305,6 +1468,8 @@ var tarteaucitron = {
                 itemStatusElem.innerHTML = tarteaucitron.lang.disallowed;
                 tarteaucitron.sendEvent(key + '_disallowed');
             }
+            // update GTM consents after the user has changed the UI state
+            tarteaucitron.updateGTMConsents();
         },
         "color": function (key, status) {
             "use strict";
@@ -2245,7 +2410,6 @@ var tarteaucitron = {
         html += '       </button>';
         html += '   </div>';
         html += '</div>';
-
         return html;
     },
     "extend": function (a, b) {
